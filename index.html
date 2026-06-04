@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+<meta name="theme-color" content="#030a12"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="NexusOS"/>
+<meta name="description" content="ADHD Mission Command — gamified goal tracker with item rewards"/>
+<link rel="manifest" href="manifest.json"/>
+<link rel="apple-touch-icon" href="icon-192.svg"/>
+<title>NexusOS v2</title>
+<style>body{margin:0;background:#030a12;}</style>
+</head>
+<body>
+<div id="root"></div>
+<script>if('serviceWorker'in navigator){navigator.serviceWorker.register('sw.js').catch(()=>{});}</script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+const storage = {
+  get:(k)=>{try{const v=localStorage.getItem(k);return v?{value:v}:null;}catch(e){return null;}},
+  set:(k,v)=>{try{localStorage.setItem(k,v);return true;}catch(e){return null;}},
+};
+
+// ── SOUND EFFECTS ──────────────────────────────────────────────────────────
+const SoundManager = {
+  context: null,
+  init() { if (!this.context && typeof AudioContext !== 'undefined') { this.context = new (window.AudioContext || window.webkitAudioContext)(); } },
+  play(type) {
+    if (!this.context) this.init();
+    if (!this.context) return;
+    const t = this.context.currentTime;
+    const osc = this.context.createOscillator();
+    const gain = this.context.createGain();
+    osc.connect(gain);
+    gain.connect(this.context.destination);
+    gain.gain.setValueAtTime(0.3, t);
+    gain.gain.exponentialRampToValueAtTime(0.01, t + 0.3);
+    switch(type) {
+      case 'task': osc.frequency.setValueAtTime(800, t); osc.frequency.exponentialRampToValueAtTime(600, t + 0.1); osc.start(t); osc.stop(t + 0.1); break;
+      case 'boss': 
+        osc.frequency.setValueAtTime(200, t);
+        osc.frequency.exponentialRampToValueAtTime(100, t + 0.5);
+        gain.gain.exponentialRampToValueAtTime(0.01, t + 0.5);
+        osc.start(t);
+        osc.stop(t + 0.5);
+        break;
+      case 'reward': 
+        gain.gain.setValueAtTime(0.2, t);
+        gain.gain.exponentialRampToValueAtTime(0.01, t + 0.6);
+        [880, 1100, 1320].forEach((f, i) => {
+          const o = this.context.createOscillator();
+          o.frequency.setValueAtTime(f, t + i*0.05);
+          o.connect(gain);
+          o.start(t + i*0.05);
+          o.stop(t + 0.6);
+        });
+        break;
+      case 'warning': osc.frequency.setValueAtTime(400, t); osc.frequency.linearRampToValueAtTime(300, t + 0.15); osc.start(t); osc.stop(t + 0.15); break;
+    }
+  }
+};
+
+const GlobalStyles = () => (
+<style>{`
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&family=Rajdhani:wght@300;400;500;600&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+:root{
+  --bg:#030a12;--bg2:#060f1c;--panel:#0a1828;--border:#0d2a45;--border2:#1a4060;
+  --cyan:#00e5ff;--cyan2:#00b4d8;--gold:#ffd60a;--gold2:#ffaa00;
+  --red:#ff4060;--green:#00ff9d;--purple:#b060ff;--orange:#ff9020;
+  --text:#c8e8ff;--text2:#5a8aaa;--text3:#2a5070;
+  --glow-c:0 0 12px #00e5ff66;--glow-g:0 0 12px #ffd60a66;--glow-r:0 0 12px #ff406066;
+}
+html{height:100%;}
+body{background:var(--bg);color:var(--text);font-family:'Rajdhani',sans-serif;font-size:18px;line-height:1.5;min-height:100%;overflow-x:hidden;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);}
+body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,229,255,0.015) 2px,rgba(0,229,255,0.015) 4px);pointer-events:none;z-index:9998;}
+body::after{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(0,229,255,0.04) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,0.04) 1px,transparent 1px);background-size:40px 40px;pointer-events:none;z-index:0;}
+#root{position:relative;z-index:1;}
+::-webkit-scrollbar{width:5px;}::-webkit-scrollbar-track{background:var(--bg2);}::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px;}
+.panel{background:var(--panel);border:1px solid var(--border);position:relative;overflow:hidden;}
+.panel::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--cyan),transparent);opacity:0.5;}
+.clip{clip-path:polygon(12px 0%,100% 0%,100% calc(100% - 12px),calc(100% - 12px) 100%,0% 100%,0% 12px);}
+.btn{font-family:'Orbitron',monospace;font-size:13px;font-weight:600;letter-spacing:1px;padding:10px 18px;border:1px solid var(--cyan);background:transparent;color:var(--cyan);cursor:pointer;transition:all 0.2s;clip-path:polygon(6px 0%,100% 0%,100% calc(100% - 6px),calc(100% - 6px) 100%,0% 100%,0% 6px);text-transform:uppercase;-webkit-tap-highlight-color:transparent;}
+.btn:hover,.btn:active{background:rgba(0,229,255,0.12);box-shadow:var(--glow-c);}
+.btn:disabled{opacity:0.35;cursor:not-allowed;}
+.btn.btn-gold{border-color:var(--gold);color:var(--gold);}.btn.btn-gold:hover,.btn.btn-gold:active{background:rgba(255,214,10,0.1);box-shadow:var(--glow-g);}
+.btn.btn-red{border-color:var(--red);color:var(--red);}.btn.btn-red:hover,.btn.btn-red:active{background:rgba(255,64,96,0.1);}
+.btn.btn-green{border-color:var(--green);color:var(--green);}.btn.btn-green:hover,.btn.btn-green:active{background:rgba(0,255,157,0.1);}
+.btn.btn-purple{border-color:var(--purple);color:var(--purple);}.btn.btn-purple:hover,.btn.btn-purple:active{background:rgba(176,96,255,0.1);}
+.btn.btn-sm{font-size:11px;padding:6px 12px;}
+.btn.btn-ghost{border-color:var(--border2);color:var(--text2);font-family:'Rajdhani',sans-serif;font-size:14px;letter-spacing:0;text-transform:none;}
+.btn.btn-ghost:hover,.btn.btn-ghost:active{border-color:var(--cyan);color:var(--cyan);background:rgba(0,229,255,0.05);}
+.input{background:rgba(0,229,255,0.04);border:1px solid var(--border2);color:var(--text);font-family:'Rajdhani',sans-serif;font-size:16px;padding:10px 14px;outline:none;transition:border-color 0.2s,box-shadow 0.2s;width:100%;-webkit-appearance:none;border-radius:0;}
+.input:focus{border-color:var(--cyan);box-shadow:var(--glow-c);}
+.input::placeholder{color:var(--text3);}
+select.input option{background:var(--panel);}
+textarea.input{resize:vertical;min-height:80px;}
+.xp-bar-track{height:8px;background:rgba(0,229,255,0.08);border:1px solid var(--border);overflow:hidden;}
+.xp-bar-fill{height:100%;background:linear-gradient(90deg,var(--cyan2),var(--cyan));box-shadow:0 0 8px var(--cyan);transition:width 0.8s cubic-bezier(.34,1.56,.64,1);}
+.boss-hp-track{height:12px;background:rgba(255,64,96,0.1);border:1px solid rgba(255,64,96,0.3);overflow:hidden;position:relative;}
+.boss-hp-fill{height:100%;background:linear-gradient(90deg,#ff1a40,#ff4060,#ff6080);box-shadow:0 0 10px #ff406088;transition:width 1s cubic-bezier(.34,1.56,.64,1);position:relative;}
+.boss-hp-fill::after{content:'';position:absolute;inset:0;background:repeating-linear-gradient(90deg,transparent,transparent 20px,rgba(255,255,255,0.06) 20px,rgba(255,255,255,0.06) 21px);}
+@keyframes fadeSlideIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes float-up{0%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0;transform:translateY(-60px) scale(1.4)}}
+@keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px)}40%{transform:translateX(8px)}60%{transform:translateX(-5px)}80%{transform:translateX(5px)}}
+@keyframes unlock-pop{0%{opacity:0;transform:scale(0.4) rotate(-10deg)}60%{opacity:1;transform:scale(1.2) rotate(3deg)}100%{opacity:1;transform:scale(1) rotate(0deg)}}
+@keyframes particle{0%{opacity:1;transform:translate(0,0) scale(1)}100%{opacity:0;transform:translate(var(--dx),var(--dy)) scale(0)}}
+@keyframes boss-damaged{0%,100%{filter:brightness(1)}50%{filter:brightness(2.5) saturate(0)}}
+@keyframes defeat-flash{0%{opacity:0}20%{opacity:1}80%{opacity:1}100%{opacity:0}}
+@keyframes defeat-scale{0%{transform:scale(0.5);opacity:0}60%{transform:scale(1.08)}100%{transform:scale(1);opacity:1}}
+@keyframes ring-expand{0%{transform:scale(0.3);opacity:1}100%{transform:scale(3);opacity:0}}
+@keyframes scanpulse{0%{top:-100%}100%{top:100%}}
+@keyframes ai-typing{0%,100%{opacity:1}50%{opacity:0.3}}
+@keyframes timer-tick{0%{transform:scale(1)}50%{transform:scale(1.04)}100%{transform:scale(1)}}
+@keyframes stagger-in{from{opacity:0;transform:translateX(-12px)}to{opacity:1;transform:translateX(0)}}
+@keyframes flame-pulse{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.15)}}
+@keyframes glow-tier{0%,100%{box-shadow:0 0 15px rgba(255,214,10,0.3)}50%{box-shadow:0 0 30px rgba(255,214,10,0.6)}}
+.tier-critical{animation:glow-tier 1.5s ease-in-out infinite;border-color:#ff1a40 !important;}
+.tier-important{animation:glow-tier 2s ease-in-out infinite;border-color:#ff9020 !important;}
+.tier-moderate{animation:glow-tier 3s ease-in-out infinite;border-color:#ffd60a !important;}
+.undo-toast{position:fixed;bottom:calc(80px + env(safe-area-inset-bottom,0px));right:16px;background:linear-gradient(135deg,#0a1828,#0f2240);border:1px solid var(--cyan);padding:14px 18px;z-index:9500;animation:fadeSlideIn 0.4s ease;border-radius:4px;font-family:Orbitron;font-size:12px;color:var(--cyan);}
+`}</style>
+);
+
+const IMPORTANCE_TIERS = {
+  moderate: {label:"MODERATELY IMPORTANT", color:"#ffd60a", icon:"◆", shortLabel:"MODERATE"},
+  important: {label:"IMPORTANT", color:"#ff9020", icon:"⬥", shortLabel:"IMPORTANT"},
+  critical: {label:"CRITICAL", color:"#ff1a40", icon:"●", shortLabel:"CRITICAL"},
+};
+
+const CATEGORIES={
+  learning:{label:"LEARNING / SKILLS",color:"#00e5ff",icon:"◈"},
+  work:{label:"WORK / CAREER",color:"#ffd60a",icon:"◆"},
+  project:{label:"PERSONAL PROJECT",color:"#b060ff",icon:"◉"},
+  habits:{label:"HABITS / ROUTINE",color:"#00ff9d",icon:"◎"},
+};
+const SIZES={
+  tiny:{label:"MICRO",xp:10,dmg:2,color:"#5a8aaa"},
+  small:{label:"MINOR",xp:25,dmg:5,color:"#00e5ff"},
+  medium:{label:"NORMAL",xp:60,dmg:12,color:"#ffd60a"},
+  large:{label:"MAJOR",xp:120,dmg:25,color:"#ff9020"},
+  epic:{label:"EPIC",xp:250,dmg:50,color:"#ff4060"},
+};
+const RANKS=[
+  {min:0,label:"RECRUIT",color:"#5a8aaa"},
+  {min:100,label:"OPERATIVE",color:"#00e5ff"},
+  {min:300,label:"SPECIALIST",color:"#00b4d8"},
+  {min:600,label:"COMMANDER",color:"#ffd60a"},
+  {min:1000,label:"ELITE",color:"#ff9020"},
+  {min:1800,label:"LEGEND",color:"#b060ff"},
+  {min:3000,label:"APEX WARRIOR",color:"#ff4060"},
+];
+const BADGES=[
+  {id:"first_blood",label:"FIRST STRIKE",icon:"⚡",desc:"Complete your first task",condition:s=>s.totalCompleted>=1},
+  {id:"streak3",label:"MOMENTUM",icon:"🔥",desc:"3-day streak",condition:s=>s.streak>=3},
+  {id:"streak7",label:"UNSTOPPABLE",icon:"💥",desc:"7-day streak",condition:s=>s.streak>=7},
+  {id:"xp500",label:"POWER SURGE",icon:"⚡",desc:"Earn 500 XP",condition:s=>s.totalXP>=500},
+  {id:"xp1000",label:"OVERDRIVE",icon:"🌟",desc:"Earn 1000 XP",condition:s=>s.totalXP>=1000},
+  {id:"boss1",label:"BOSS SLAYER",icon:"☠",desc:"Complete your first goal",condition:s=>s.bossesDefeated>=1},
+  {id:"boss3",label:"WARLORD",icon:"👑",desc:"Defeat 3 bosses",condition:s=>s.bossesDefeated>=3},
+  {id:"epic1",label:"EPIC STRIKE",icon:"💎",desc:"Complete an Epic task",condition:s=>s.epicCompleted>=1},
+  {id:"tasks10",label:"RELENTLESS",icon:"🎯",desc:"Complete 10 tasks",condition:s=>s.totalCompleted>=10},
+  {id:"tasks50",label:"MACHINE",icon:"🤖",desc:"Complete 50 tasks",condition:s=>s.totalCompleted>=50},
+  {id:"focused",label:"LASER FOCUS",icon:"🔭",desc:"5 Focus Mode sessions",condition:s=>s.focusSessions>=5},
+  {id:"ai_planner",label:"ARCHITECT",icon:"🧠",desc:"Use AI Planner once",condition:s=>s.aiPlans>=1},
+  {id:"collector",label:"COLLECTOR",icon:"💎",desc:"Collect 5 unique items",condition:s=>s.uniqueItems>=5},
+];
+const MOODS=[
+  {id:"🔥",label:"OVERDRIVE",desc:"Full energy",filter:null,color:"#ff9020"},
+  {id:"⚡",label:"CHARGED",desc:"Good focus",filter:null,color:"#ffd60a"},
+  {id:"〰",label:"STEADY",desc:"Normal pace",filter:["tiny","small","medium"],color:"#00e5ff"},
+  {id:"😶",label:"LOW POWER",desc:"Easy wins only",filter:["tiny","small"],color:"#5a8aaa"},
+  {id:"💤",label:"REST MODE",desc:"Micro tasks only",filter:["tiny"],color:"#2a5070"},
+];
+
+const generateRewardItem = (xpEarned, taskTitle, tier) => {
+  const types = ["CORE", "CHIP", "SHARD", "MATRIX", "NEXUS", "CRYSTAL", "FORGE", "PULSE"];
+  const names = ["Aurora", "Vortex", "Cipher", "Sentinel", "Eclipse", "Prism", "Quantum", "Void"];
+  const typeIdx = Math.floor(Math.random() * types.length);
+  const nameIdx = Math.floor(Math.random() * names.length);
+  return {
+    id: Date.now(),
+    type: types[typeIdx],
+    name: names[nameIdx],
+    xp: xpEarned,
+    rarity: xpEarned >= 150 ? "LEGENDARY" : xpEarned >= 60 ? "RARE" : "COMMON",
+    emoji: ["🔮","⚙️","🌌","⚡","💎","🔷","🌀","✨"][Math.floor(Math.random()*8)],
+    earnedFrom: taskTitle,
+    earnedDate: new Date().toLocaleDateString(),
+    tier,
+  };
+};
+
+const xpForNextRank=xp=>{for(let i=RANKS.length-1;i>=0;i--){if(xp>=RANKS[i].min){const next=RANKS[i+1];if(!next)return{rank:RANKS[i],progress:100,nextXP:null};return{rank:RANKS[i],progress:((xp-RANKS[i].min)/(next.min-RANKS[i].min))*100,nextXP:next.min};}}return{rank:RANKS[0],progress:0,nextXP:RANKS[1].min};};
+const flattenTasks=tasks=>{const r=[];const w=ts=>ts.forEach(t=>{r.push(t);if(t.children)w(t.children);});w(tasks||[]);return r;};
+const calcMaxHP=tasks=>{let t=0;const s=ts=>ts.forEach(x=>{t+=SIZES[x.size]?.dmg||5;if(x.children)s(x.children);});s(tasks);return Math.max(t,1);};
+
+const ParticleExplosion=({x,y,color="#00e5ff",onDone})=>{useEffect(()=>{const t=setTimeout(onDone,900);return()=>clearTimeout(t);},[onDone]);return(<div style={{position:"fixed",left:x,top:y,pointerEvents:"none",zIndex:10000}}>{Array.from({length:25}).map((_,i)=>{const a=(i/25)*Math.PI*2,d=40+Math.random()*80;return<div key={i} style={{position:"absolute",width:4+Math.random()*6,height:4+Math.random()*6,borderRadius:"50%",background:color,boxShadow:`0 0 8px ${color}`,"--dx":Math.cos(a)*d+"px","--dy":Math.sin(a)*d+"px",animation:`particle ${0.5+Math.random()*0.4}s ease-out forwards`,animationDelay:`${Math.random()*0.1}s`}}/>;})}</div>);};
+const FloatingXP=({x,y,xp,color,onDone})=>{useEffect(()=>{const t=setTimeout(onDone,900);return()=>clearTimeout(t);},[onDone]);return<div style={{position:"fixed",left:x,top:y,pointerEvents:"none",zIndex:10001,fontFamily:"'Orbitron',monospace",fontSize:22,fontWeight:900,color,textShadow:`0 0 12px ${color}`,animation:"float-up 0.9s ease-out forwards"}}>+{xp} XP</div>;};
+const UnlockToast=({badge,onDone})=>{useEffect(()=>{const t=setTimeout(onDone,3500);return()=>clearTimeout(t);},[onDone]);return(<div style={{position:"fixed",bottom:"calc(90px + env(safe-area-inset-bottom,0px))",right:18,background:"linear-gradient(135deg,#0a1828,#0f2240)",border:"1px solid var(--gold)",padding:"16px 22px",zIndex:10002,animation:"unlock-pop 0.5s cubic-bezier(.34,1.56,.64,1) forwards",boxShadow:"0 0 30px rgba(255,214,10,0.4)",minWidth:240,clipPath:"polygon(10px 0%,100% 0%,100% calc(100% - 10px),calc(100% - 10px) 100%,0% 100%,0% 10px)"}}><div style={{color:"var(--gold)",fontFamily:"Orbitron",fontSize:11,letterSpacing:2,marginBottom:6}}>🔓 UNLOCKED</div><div style={{fontSize:28,marginBottom:4}}>{badge.icon}</div><div style={{fontFamily:"Orbitron",fontSize:14,color:"var(--gold)",fontWeight:700}}>{badge.label}</div><div style={{color:"var(--text2)",fontSize:12,marginTop:2}}>{badge.desc}</div></div>);};
+const DamageNumber=({dmg,onDone})=>{useEffect(()=>{const t=setTimeout(onDone,1000);return()=>clearTimeout(t);},[onDone]);return<div style={{position:"absolute",top:-12,right:20,fontFamily:"Orbitron",fontSize:26,fontWeight:900,color:"#ff4060",textShadow:"0 0 12px #ff4060",pointerEvents:"none",zIndex:100,animation:"float-up 1s ease-out forwards"}}>-{dmg} HP</div>;};
+const ItemUnlockToast=({item,onDone})=>{useEffect(()=>{const t=setTimeout(onDone,4000);return()=>clearTimeout(t);},[onDone]);return(<div style={{position:"fixed",bottom:"calc(140px + env(safe-area-inset-bottom,0px))",right:18,background:"linear-gradient(135deg,#1a0f28,#2a1840)",border:`1px solid ${["LEGENDARY","RARE"].includes(item.rarity)?"var(--gold)":"var(--cyan)"}`,padding:"14px 20px",zIndex:10002,animation:"unlock-pop 0.6s cubic-bezier(.34,1.56,.64,1) forwards",boxShadow:`0 0 40px ${["LEGENDARY","RARE"].includes(item.rarity)?"rgba(255,214,10,0.5)":"rgba(0,229,255,0.3)"}`,minWidth:260,clipPath:"polygon(10px 0%,100% 0%,100% calc(100% - 10px),calc(100% - 10px) 100%,0% 100%,0% 10px)"}}><div style={{color:["LEGENDARY","RARE"].includes(item.rarity)?"var(--gold)":"var(--cyan)",fontFamily:"Orbitron",fontSize:10,letterSpacing:2,marginBottom:4}}>⚙ ITEM ACQUIRED</div><div style={{display:"flex",alignItems:"center",gap:12}}><div style={{fontSize:32}}>{item.emoji}</div><div><div style={{fontFamily:"Orbitron",fontSize:13,color:["LEGENDARY","RARE"].includes(item.rarity)?"var(--gold)":"var(--cyan)",fontWeight:700}}>{item.name} {item.type}</div><div style={{fontSize:11,color:"var(--text3)"}}>{item.rarity}</div></div></div></div>);};
+
+const BossDefeatCutscene=({goal,onDone})=>{const[phase,setPhase]=useState(0);useEffect(()=>{const ts=[setTimeout(()=>setPhase(1),100),setTimeout(()=>setPhase(2),900),setTimeout(()=>setPhase(3),2000),setTimeout(onDone,5000)];return()=>ts.forEach(clearTimeout);},[onDone]);const tier=IMPORTANCE_TIERS[goal.importance||"moderate"];const cat=CATEGORIES[goal.category];return(<div style={{position:"fixed",inset:0,zIndex:20000,display:"flex",alignItems:"center",justifyContent:"center",background:"#000",overflow:"hidden"}}>
+{phase>=1&&<div style={{position:"absolute",inset:0,background:"white",animation:"defeat-flash 0.6s ease-out forwards",pointerEvents:"none"}}/>}
+{phase>=1&&[0,1,2,3].map(i=><div key={i} style={{position:"absolute",width:240,height:240,border:`3px solid ${tier.color}`,borderRadius:"50%",animation:`ring-expand 1.4s ease-out ${i*0.15}s forwards`,pointerEvents:"none"}}/>)}
+{phase>=1&&Array.from({length:50}).map((_,i)=>{const a=(i/50)*Math.PI*2,d=100+Math.random()*220;return<div key={i} style={{position:"absolute",left:"50%",top:"50%",width:5+Math.random()*8,height:5+Math.random()*8,borderRadius:"50%",background:i%4===0?tier.color:i%4===1?cat.color:"var(--red)","--dx":Math.cos(a)*d+"px","--dy":Math.sin(a)*d+"px",animation:`particle ${0.9+Math.random()*0.7}s ease-out forwards`,animationDelay:`${Math.random()*0.4}s`,pointerEvents:"none"}}/>;})}
+<div style={{position:"absolute",left:0,right:0,height:3,background:`linear-gradient(90deg,transparent,${tier.color},transparent)`,animation:"scanpulse 1.2s ease-in-out",pointerEvents:"none"}}/>
+{phase>=2&&<div style={{textAlign:"center",animation:"defeat-scale 0.6s cubic-bezier(.34,1.56,.64,1) forwards",position:"relative",zIndex:1,padding:"0 28px"}}>
+<div style={{fontSize:90,marginBottom:12,filter:`drop-shadow(0 0 40px ${tier.color})`}}>☠</div>
+<div style={{fontFamily:"Orbitron",fontSize:28,fontWeight:900,color:tier.color,letterSpacing:5,textShadow:`0 0 50px ${tier.color}`,marginBottom:10}}>BOSS DEFEATED</div>
+<div style={{fontFamily:"Orbitron",fontSize:16,color:tier.color,letterSpacing:4,marginBottom:6}}>{goal.bossName}</div>
+<div style={{fontFamily:"Orbitron",fontSize:13,color:"var(--text2)",letterSpacing:2}}>{goal.title}</div>
+</div>}
+{phase>=1&&<button onClick={onDone} style={{position:"absolute",bottom:"calc(48px + env(safe-area-inset-bottom,0px))",right:32,background:"transparent",border:"1px solid rgba(255,255,255,0.2)",color:"rgba(255,255,255,0.4)",fontFamily:"Orbitron",fontSize:11,padding:"8px 16px",cursor:"pointer",letterSpacing:1}}>SKIP</button>}
+</div>);};
+
+const GoalEditModal = ({goal, onSave, onDelete, onClose}) => {
+  const [title, setTitle] = useState(goal.title);
+  const [bossName, setBossName] = useState(goal.bossName);
+  const [importance, setImportance] = useState(goal.importance || "moderate");
+  const [category, setCategory] = useState(goal.category);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+
+  return (
+    <div style={{position:"fixed",inset:0,zIndex:13000,background:"rgba(2,8,16,0.96)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div className="panel clip" style={{width:"100%",maxWidth:520,maxHeight:"88vh",overflow:"auto",padding:24,borderColor:"var(--cyan)"}}>
+        <div style={{fontFamily:"Orbitron",fontSize:14,color:"var(--cyan)",letterSpacing:2,marginBottom:20}}>✎ EDIT MISSION</div>
+        
+        <div style={{display:"flex",flexDirection:"column",gap:16}}>
+          <div>
+            <label style={{display:"block",fontFamily:"Orbitron",fontSize:11,color:"var(--text2)",letterSpacing:1,marginBottom:7}}>MISSION NAME</label>
+            <input className="input" value={title} onChange={e=>setTitle(e.target.value)}/>
+          </div>
+          
+          <div>
+            <label style={{display:"block",fontFamily:"Orbitron",fontSize:11,color:"var(--text2)",letterSpacing:1,marginBottom:7}}>CATEGORY</label>
+            <select className="input" value={category} onChange={e=>setCategory(e.target.value)}>
+              {Object.entries(CATEGORIES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
+            </select>
+          </div>
+          
+          <div>
+            <label style={{display:"block",fontFamily:"Orbitron",fontSize:11,color:"var(--text2)",letterSpacing:1,marginBottom:7}}>IMPORTANCE TIER</label>
+            <select className="input" value={importance} onChange={e=>setImportance(e.target.value)}>
+              {Object.entries(IMPORTANCE_TIERS).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
+            </select>
+          </div>
+          
+          <div>
+            <label style={{display:"block",fontFamily:"Orbitron",fontSize:11,color:"var(--text2)",letterSpacing:1,marginBottom:7}}>BOSS NAME</label>
+            <input className="input" value={bossName} onChange={e=>setBossName(e.target.value)}/>
+          </div>
+
+          <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:10}}>
+            <button className="btn btn-gold" onClick={()=>onSave({title,bossName,category,importance})}>✓ SAVE CHANGES</button>
+            <button className="btn btn-ghost" onClick={onClose}>CANCEL</button>
+          </div>
+
+          <div style={{borderTop:"1px solid var(--border)",paddingTop:16,marginTop:8}}>
+            {!deleteConfirm?
+              <button className="btn btn-red" onClick={()=>setDeleteConfirm(true)}>✕ DELETE MISSION</button>
+              :<div>
+                <div style={{color:"var(--red)",fontSize:13,marginBottom:12}}>Are you absolutely sure? This cannot be undone.</div>
+                <div style={{display:"flex",gap:10}}>
+                  <button className="btn btn-red" onClick={()=>{onDelete();onClose();}}>YES, DELETE</button>
+                  <button className="btn btn-ghost" onClick={()=>setDeleteConfirm(false)}>CANCEL</button>
+                </div>
+              </div>
+            }
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const UndoToast = ({message, onUndo, onDismiss}) => {
+  useEffect(() => {
+    const t = setTimeout(onDismiss, 5000);
+    return () => clearTimeout(t);
+  }, [onDismiss]);
+  return (
+    <div className="undo-toast">
+      <div>{message}</div>
+      <div style={{display:"flex",gap:10,marginTop:10}}>
+        <button className="btn btn-sm" onClick={onUndo}>↶ UNDO</button>
+        <button className="btn btn-sm btn-ghost" onClick={onDismiss}>✕</button>
+      </div>
+    </div>
+  );
+};
+
+const ItemInventory = ({items, onClose}) => {
+  const byRarity = {LEGENDARY: items.filter(i=>i.rarity==="LEGENDARY"), RARE: items.filter(i=>i.rarity==="RARE"), COMMON: items.filter(i=>i.rarity==="COMMON")};
+  return (
+    <div style={{position:"fixed",inset:0,zIndex:13000,background:"rgba(2,8,16,0.96)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div className="panel clip" style={{width:"100%",maxWidth:600,maxHeight:"88vh",overflow:"auto",padding:24,borderColor:"var(--purple)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+          <div style={{fontFamily:"Orbitron",fontSize:14,color:"var(--purple)",letterSpacing:2}}>⚙ ITEM INVENTORY ({items.length})</div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+
+        {[["LEGENDARY","var(--gold)"],["RARE","var(--orange)"],["COMMON","var(--cyan)"]].map(([rarity,color])=>(
+          byRarity[rarity].length>0 && <div key={rarity} style={{marginBottom:20}}>
+            <div style={{fontFamily:"Orbitron",fontSize:12,color:color,letterSpacing:2,marginBottom:12}}>{rarity} ({byRarity[rarity].length})</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:10}}>
+              {byRarity[rarity].map(item=>(
+                <div key={item.id} className="panel clip" style={{padding:12,borderColor:color+"44"}}>
+                  <div style={{fontSize:24,marginBottom:6}}>{item.emoji}</div>
+                  <div style={{fontFamily:"Orbitron",fontSize:11,color:color,fontWeight:700}}>{item.name} {item.type}</div>
+                  <div style={{fontSize:11,color:"var(--text3)",marginTop:4}}>+{item.xp} XP from {item.earnedFrom.substring(0,20)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+
+        <div style={{marginTop:20}}>
+          <button className="btn btn-ghost" onClick={onClose}>← BACK</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+function TaskRow({task,goalId,onComplete,onReopen,onAddChild,depth,moodFilter,lockedCompleted}){
+  const sz=SIZES[task.size];
+  const [expanded,setExpanded]=useState(true);
+  const hasChildren=task.children?.length>0;
+  const dimmed=moodFilter&&!moodFilter.includes(task.size)&&!task.completed;
+  const isLocked=task.completed&&lockedCompleted;
+  
+  return(<div style={{marginLeft:depth*16,opacity:dimmed?0.3:1,transition:"opacity 0.3s"}}>
+    <div className={`panel ${task.completed?"":"clip"}`} style={{padding:"11px 13px",borderColor:task.completed?"var(--border)":sz.color+"55",transition:"all 0.3s",display:"flex",alignItems:"center",gap:8,opacity:isLocked?0.4:1}}>
+      <button onClick={e=>onComplete(goalId,task.id,e)} disabled={isLocked}
+        style={{width:24,height:24,flexShrink:0,border:`2px solid ${task.completed?"var(--green)":sz.color}`,background:task.completed?"rgba(0,255,157,0.15)":"transparent",cursor:isLocked?"not-allowed":"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:task.completed?"var(--green)":sz.color,fontSize:13,fontWeight:900,clipPath:"polygon(4px 0,100% 0,100% calc(100% - 4px),calc(100% - 4px) 100%,0 100%,0 4px)",transition:"all 0.2s",WebkitTapHighlightColor:"transparent",opacity:isLocked?0.5:1}}>
+        {task.completed?"✓":""}
+      </button>
+      <div style={{flex:1,fontSize:15,fontWeight:500,color:task.completed?"var(--text3)":"var(--text)",textDecoration:task.completed?"line-through":"none",wordBreak:"break-word"}}>{task.title}</div>
+      <div style={{fontFamily:"Orbitron",fontSize:9,color:sz.color,border:`1px solid ${sz.color}44`,padding:"2px 6px",background:sz.color+"11",flexShrink:0}}>{sz.label}</div>
+      <div style={{fontFamily:"Orbitron",fontSize:10,color:sz.color,flexShrink:0}}>+{sz.xp}</div>
+      {!task.completed&&<button className="btn btn-ghost btn-sm" style={{padding:"3px 6px",fontSize:10,flexShrink:0}}>🔭</button>}
+      {hasChildren&&<button className="btn btn-ghost btn-sm" style={{padding:"3px 6px",fontSize:11,flexShrink:0}} onClick={()=>setExpanded(e=>!e)}>{expanded?"▾":"▸"}</button>}
+      {!task.completed&&depth<2&&<button className="btn btn-ghost btn-sm" style={{padding:"3px 7px",fontSize:10,flexShrink:0}} onClick={()=>onAddChild(task.id)}>+</button>}
+    </div>
+    {hasChildren&&expanded&&<div style={{marginTop:6,display:"flex",flexDirection:"column",gap:6}}>{task.children.map(c=><TaskRow key={c.id} task={c} goalId={goalId} onComplete={onComplete} onReopen={onReopen} onAddChild={onAddChild} depth={depth+1} moodFilter={moodFilter} lockedCompleted={lockedCompleted}/>)}</div>}
+  </div>);
+}
+
+function App(){
+  const[goals,setGoals]=useState([]);
+  const[stats,setStats]=useState({totalXP:0,totalCompleted:0,streak:0,lastCompletedDate:null,bossesDefeated:0,epicCompleted:0,focusSessions:0,aiPlans:0,uniqueItems:0});
+  const[items,setItems]=useState([]);
+  const[unlockedBadges,setUnlockedBadges]=useState([]);
+  const[view,setView]=useState("dashboard");
+  const[activeGoalId,setActiveGoalId]=useState(null);
+  const[particles,setParticles]=useState([]);
+  const[floatingXPs,setFloatingXPs]=useState([]);
+  const[toasts,setToasts]=useState([]);
+  const[itemToasts,setItemToasts]=useState([]);
+  const[damageNumbers,setDamageNumbers]=useState({});
+  const[shakingGoals,setShakingGoals]=useState({});
+  const[addGoalForm,setAddGoalForm]=useState({title:"",category:"learning",bossName:"",importance:"moderate"});
+  const[addTaskForm,setAddTaskForm]=useState({title:"",size:"small",parentId:null});
+  const[showAddTask,setShowAddTask]=useState(false);
+  const[defeatedGoalId,setDefeatedGoalId]=useState(null);
+  const[mood,setMood]=useState("⚡");
+  const[editingGoal,setEditingGoal]=useState(null);
+  const[showInventory,setShowInventory]=useState(false);
+  const[undoState,setUndoState]=useState(null);
+  const loaded=useRef(false);
+
+  useEffect(()=>{
+    if(loaded.current)return;loaded.current=true;
+    try{
+      const g=storage.get("nxv2_goals"),s=storage.get("nxv2_stats"),b=storage.get("nxv2_badges"),it=storage.get("nxv2_items"),m=storage.get("nxv2_mood");
+      if(g)setGoals(JSON.parse(g.value));
+      if(s)setStats(JSON.parse(s.value));
+      if(b)setUnlockedBadges(JSON.parse(b.value));
+      if(it)setItems(JSON.parse(it.value));
+      if(m)setMood(m.value);
+      SoundManager.init();
+    }catch(_){}
+  },[]);
+
+  const save=useCallback((g,s,b,it)=>{storage.set("nxv2_goals",JSON.stringify(g));storage.set("nxv2_stats",JSON.stringify(s));storage.set("nxv2_badges",JSON.stringify(b));storage.set("nxv2_items",JSON.stringify(it));},[]);
+  const spawnFX=(e,color,xp)=>{const el=e?.currentTarget;const rect=el?.getBoundingClientRect()||{left:window.innerWidth/2,top:window.innerHeight/2,width:0,height:0};const cx=rect.left+rect.width/2,cy=rect.top+rect.height/2,pid=Date.now()+Math.random();setParticles(p=>[...p,{id:pid,x:cx,y:cy,color}]);setFloatingXPs(p=>[...p,{id:pid+1,x:cx-20,y:cy-10,xp,color}]);};
+  const checkBadges=useCallback((ns,cb)=>BADGES.filter(b=>!cb.includes(b.id)&&b.condition(ns)),[]);
+  const moodObj=MOODS.find(m=>m.id===mood)||MOODS[1];
+  const moodFilter=moodObj.filter;
+
+  const completeTask=useCallback((goalId,taskId,e)=>{
+    let sizeKey="small",wasBossDefeated=false;
+    const oldGoals=goals;
+    setGoals(prev=>{
+      const updated=prev.map(goal=>{
+        if(goal.id!==goalId)return goal;
+        const findSz=ts=>{for(const t of ts){if(t.id===taskId)return t.size;if(t.children){const f=findSz(t.children);if(f)return f;}}};
+        sizeKey=findSz(goal.tasks)||"small";const sz=SIZES[sizeKey];
+        const ut=ts=>ts.map(t=>{if(t.id===taskId)return{...t,completed:true,completedAt:Date.now()};if(t.children)return{...t,children:ut(t.children)};return t;});
+        const newTasks=ut(goal.tasks);const newHP=Math.max(0,goal.currentHP-sz.dmg);
+        if(newHP<=0&&goal.currentHP>0)wasBossDefeated=true;
+        return{...goal,tasks:newTasks,currentHP:newHP};
+      });
+      return updated;
+    });
+
+    setTimeout(()=>{
+      const sz=SIZES[sizeKey];
+      SoundManager.play('task');
+      setStats(prev=>{
+        const today=new Date().toDateString();
+        const streak=prev.lastCompletedDate===today?prev.streak:prev.lastCompletedDate===new Date(Date.now()-86400000).toDateString()?prev.streak+1:1;
+        const ns={...prev,totalXP:prev.totalXP+sz.xp,totalCompleted:prev.totalCompleted+1,streak,lastCompletedDate:today,epicCompleted:sizeKey==="epic"?prev.epicCompleted+1:prev.epicCompleted,bossesDefeated:wasBossDefeated?prev.bossesDefeated+1:prev.bossesDefeated};
+        setUnlockedBadges(ub=>{
+          const nb=checkBadges(ns,ub);
+          const merged=nb.length?[...ub,...nb.map(b=>b.id)]:ub;
+          nb.forEach((b,i)=>setTimeout(()=>setToasts(t=>[...t,{id:Date.now()+i,badge:b}]),i*800));
+          
+          // Generate reward item
+          const goal=goals.find(g=>g.id===goalId);
+          const task=flattenTasks(goal?.tasks||[]).find(t=>t.id===taskId);
+          const newItem=generateRewardItem(sz.xp,task?.title||"Task",goal?.importance||"moderate");
+          const newItems=[...items,newItem];
+          const newStats={...ns,uniqueItems:new Set(newItems.map(it=>it.name+it.type)).size};
+          
+          const newBadges=checkBadges(newStats,merged);
+          const finalBadges=newBadges.length?[...merged,...newBadges.map(b=>b.id)]:merged;
+          newBadges.forEach((b,i)=>setTimeout(()=>setToasts(t=>[...t,{id:Date.now()+1000+i,badge:b}]),i*800));
+          
+          save(oldGoals,newStats,finalBadges,newItems);
+          setItems(newItems);
+          setTimeout(()=>setItemToasts(it=>[...it,{id:Date.now(),item:newItem}]),600);
+          return finalBadges;
+        });
+        return ns;
+      });
+
+      if(wasBossDefeated){SoundManager.play('boss');setTimeout(()=>setDefeatedGoalId(goalId),400);}
+      setShakingGoals(s=>({...s,[goalId]:true}));
+      setTimeout(()=>setShakingGoals(s=>({...s,[goalId]:false})),500);
+      setDamageNumbers(d=>({...d,[goalId]:{id:Date.now(),dmg:SIZES[sizeKey].dmg}}));
+      setUndoState({type:'complete',goalId,taskId,goals:oldGoals});
+      if(e)spawnFX(e,SIZES[sizeKey].color,SIZES[sizeKey].xp);
+    },0);
+  },[goals,items,stats,unlockedBadges,checkBadges,save]);
+
+  const undo=useCallback(()=>{
+    if(!undoState)return;
+    if(undoState.type==='complete'){
+      setGoals(undoState.goals);
+      save(undoState.goals,stats,unlockedBadges,items);
+      setUndoState(null);
+    }
+  },[stats,unlockedBadges,items,save]);
+
+  const addGoal=()=>{if(!addGoalForm.title.trim())return;const ng={id:Date.now(),title:addGoalForm.title,category:addGoalForm.category,bossName:addGoalForm.bossName||"THE FINAL BOSS",importance:addGoalForm.importance,maxHP:1,currentHP:1,tasks:[],createdAt:Date.now()};setGoals(prev=>{const u=[...prev,ng];save(u,stats,unlockedBadges,items);return u;});setAddGoalForm({title:"",category:"learning",bossName:"",importance:"moderate"});setView("dashboard");};
+
+  const updateGoal=(goal,updates)=>{
+    setGoals(prev=>{const u=prev.map(g=>g.id===goal.id?{...g,...updates}:g);save(u,stats,unlockedBadges,items);return u;});
+    setEditingGoal(null);
+  };
+
+  const deleteGoal=goalId=>{setGoals(prev=>{const u=prev.filter(g=>g.id!==goalId);save(u,stats,unlockedBadges,items);return u;});setView("dashboard");};
+
+  const addTask=()=>{
+    if(!addTaskForm.title.trim())return;
+    const nt={id:Date.now(),title:addTaskForm.title,size:addTaskForm.size,completed:false,children:[]};
+    setGoals(prev=>{
+      const updated=prev.map(goal=>{
+        if(goal.id!==activeGoalId)return goal;
+        if(!addTaskForm.parentId){const newTasks=[...goal.tasks,nt];const mhp=calcMaxHP(newTasks);return{...goal,tasks:newTasks,maxHP:mhp,currentHP:Math.min(goal.currentHP+SIZES[addTaskForm.size].dmg,mhp)};}
+        const ac=ts=>ts.map(t=>{if(t.id===addTaskForm.parentId)return{...t,children:[...(t.children||[]),nt]};if(t.children)return{...t,children:ac(t.children)};return t;});
+        const newTasks=ac(goal.tasks);return{...goal,tasks:newTasks,maxHP:calcMaxHP(newTasks)};
+      });
+      save(updated,stats,unlockedBadges,items);return updated;
+    });
+    setAddTaskForm({title:"",size:"small",parentId:null});setShowAddTask(false);
+  };
+
+  const activeGoal=goals.find(g=>g.id===activeGoalId);
+  const defeatedGoal=goals.find(g=>g.id===defeatedGoalId);
+  const{rank,progress,nextXP}=xpForNextRank(stats.totalXP);
+  const tierInfo=IMPORTANCE_TIERS[activeGoal?.importance||"moderate"];
+
+  return(<>
+    <GlobalStyles/>
+    {particles.map(p=><ParticleExplosion key={p.id} x={p.x} y={p.y} color={p.color} onDone={()=>setParticles(prev=>prev.filter(x=>x.id!==p.id))}/>)}
+    {floatingXPs.map(p=><FloatingXP key={p.id} x={p.x} y={p.y} xp={p.xp} color={p.color} onDone={()=>setFloatingXPs(prev=>prev.filter(x=>x.id!==p.id))}/>)}
+    {toasts.map(t=><UnlockToast key={t.id} badge={t.badge} onDone={()=>setToasts(prev=>prev.filter(x=>x.id!==t.id))}/>)}
+    {itemToasts.map(t=><ItemUnlockToast key={t.id} item={t.item} onDone={()=>setItemToasts(prev=>prev.filter(x=>x.id!==t.id))}/>)}
+    {defeatedGoal&&<BossDefeatCutscene goal={defeatedGoal} onDone={()=>setDefeatedGoalId(null)}/>}
+    {editingGoal&&<GoalEditModal goal={editingGoal} onSave={(updates)=>updateGoal(editingGoal,updates)} onDelete={()=>deleteGoal(editingGoal.id)} onClose={()=>setEditingGoal(null)}/>}
+    {showInventory&&<ItemInventory items={items} onClose={()=>setShowInventory(false)}/>}
+    {undoState&&<UndoToast message="Task undone" onUndo={undo} onDismiss={()=>setUndoState(null)}/>}
+
+    <div style={{maxWidth:1080,margin:"0 auto",padding:"18px 16px 100px"}}>
+      <header style={{marginBottom:26}}>
+        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:12,gap:12}}>
+          <div>
+            <div style={{fontFamily:"Orbitron",fontSize:26,fontWeight:900,color:"var(--cyan)",letterSpacing:4,textShadow:"0 0 20px rgba(0,229,255,0.5)"}}>◈ NEXUS<span style={{color:"var(--gold)"}}>OS</span></div>
+            <div style={{color:"var(--text3)",fontSize:11,letterSpacing:2,fontFamily:"Orbitron"}}>v2 COMMAND INTERFACE</div>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:5}}>
+            <button className="btn btn-sm btn-purple" onClick={()=>setShowInventory(true)}>⚙ INVENTORY ({items.length})</button>
+            <div style={{fontFamily:"Orbitron",fontSize:11,color:rank.color,letterSpacing:1}}>◆ {rank.label}</div>
+            <div style={{color:"var(--text2)",fontSize:12}}>{stats.totalXP.toLocaleString()} XP{nextXP&&<span style={{color:"var(--text3)"}}> / {nextXP.toLocaleString()}</span>}</div>
+            <div style={{width:150}}><div className="xp-bar-track"><div className="xp-bar-fill" style={{width:`${Math.min(progress,100)}%`}}/></div></div>
+            {stats.streak>0&&<div style={{color:"#ff9020",fontSize:11,fontFamily:"Orbitron"}}>🔥 {stats.streak}d STREAK</div>}
+          </div>
+        </div>
+        <div style={{display:"flex",gap:8,borderBottom:"1px solid var(--border)",paddingBottom:12,flexWrap:"wrap"}}>
+          <button className="btn btn-sm" style={view==="dashboard"?{background:"rgba(0,229,255,0.15)"}:{}} onClick={()=>setView("dashboard")}>◈ Dashboard</button>
+          <button className="btn btn-sm btn-gold" onClick={()=>setView("add-goal")}>+ New Mission</button>
+          <button className="btn btn-sm btn-ghost" onClick={()=>setView("badges")}>🏆 Badges</button>
+        </div>
+      </header>
+
+      {view==="dashboard"&&<div style={{animation:"fadeSlideIn 0.3s ease"}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:24}}>
+          {[{label:"TOTAL XP",value:stats.totalXP.toLocaleString(),color:"var(--cyan)"},{label:"COMPLETED",value:stats.totalCompleted,color:"var(--green)"},{label:"BOSSES SLAIN",value:stats.bossesDefeated,color:"var(--red)"},{label:"STREAK",value:`${stats.streak}d`,color:"#ff9020"}].map(s=>(
+            <div key={s.label} className="panel clip" style={{padding:"14px 16px"}}>
+              <div style={{color:"var(--text3)",fontSize:10,fontFamily:"Orbitron",letterSpacing:1,marginBottom:5}}>{s.label}</div>
+              <div style={{fontFamily:"Orbitron",fontSize:24,fontWeight:900,color:s.color}}>{s.value}</div>
+            </div>
+          ))}
+        </div>
+
+        {goals.length===0?<div style={{textAlign:"center",padding:"60px 20px",color:"var(--text3)"}}>
+          <div style={{fontSize:48,marginBottom:16}}>◈</div>
+          <div style={{fontFamily:"Orbitron",fontSize:16,letterSpacing:2,marginBottom:10}}>NO ACTIVE MISSIONS</div>
+          <div style={{fontSize:14,marginBottom:20}}>Deploy your first mission to begin.</div>
+          <button className="btn btn-gold" onClick={()=>setView("add-goal")}>+ NEW MISSION</button>
+        </div>:<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:14}}>
+          {goals.map(goal=>{
+            const cat=CATEGORIES[goal.category];
+            const tier=IMPORTANCE_TIERS[goal.importance||"moderate"];
+            const hpPct=goal.maxHP>0?(goal.currentHP/goal.maxHP)*100:100;
+            const allT=flattenTasks(goal.tasks);
+            const done=allT.filter(t=>t.completed).length;
+            const total=allT.length;
+            const defeated=goal.currentHP<=0;
+            const dmgNum=damageNumbers[goal.id];
+            return(<div key={goal.id} className={`panel clip ${["critical"].includes(goal.importance)?"tier-critical":["important"].includes(goal.importance)?"tier-important":"tier-moderate"}`} style={{padding:18,cursor:"pointer",borderColor:defeated?var(--gold):tier.color+"44",animation:shakingGoals[goal.id]?"shake 0.4s ease, boss-damaged 0.4s ease":"none",position:"relative",transition:"all 0.3s"}} onClick={()=>{setActiveGoalId(goal.id);setView("goal");}}>
+              {dmgNum&&<DamageNumber key={dmgNum.id} dmg={dmgNum.dmg} onDone={()=>setDamageNumbers(d=>{const n={...d};delete n[goal.id];return n;})}/>}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+                <div style={{flex:1,marginRight:10}}>
+                  <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:4}}>
+                    <div style={{fontFamily:"Orbitron",fontSize:10,color:cat.color,letterSpacing:1}}>{cat.icon} {cat.label}</div>
+                    <div style={{fontFamily:"Orbitron",fontSize:9,color:tier.color,border:`1px solid ${tier.color}44`,padding:"2px 6px",background:tier.color+"11"}}>{tier.shortLabel}</div>
+                  </div>
+                  <div style={{fontWeight:700,fontSize:16,color:"var(--text)",lineHeight:1.3}}>{goal.title}</div>
+                </div>
+                {defeated&&<div style={{fontSize:22}}>☠</div>}
+              </div>
+              <div style={{marginBottom:8}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}>
+                  <span style={{fontFamily:"Orbitron",color:"var(--red)",fontSize:11}}>☠ {goal.bossName}</span>
+                  <span style={{color:defeated?"var(--gold)":"var(--red)"}}>{defeated?"DEFEATED":`${Math.ceil(hpPct)}% HP`}</span>
+                </div>
+                <div className="boss-hp-track"><div className="boss-hp-fill" style={{width:`${hpPct}%`,background:defeated?"var(--gold)":undefined}}/></div>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:12,color:"var(--text2)"}}>
+                <span>{done}/{total} tasks</span>
+                <div style={{display:"flex",gap:6}}>
+                  <span style={{color:tier.color,fontFamily:"Orbitron"}}>{total>0?Math.round((done/total)*100):0}%</span>
+                  <button className="btn btn-ghost btn-sm" onClick={(e)=>{e.stopPropagation();setEditingGoal(goal);}}>✎</button>
+                </div>
+              </div>
+            </div>);
+          })}
+        </div>}
+      </div>}
+
+      {view==="add-goal"&&<div style={{animation:"fadeSlideIn 0.3s ease",maxWidth:540}}>
+        <div style={{fontFamily:"Orbitron",fontSize:15,color:"var(--gold)",letterSpacing:2,marginBottom:20}}>◆ DEPLOY NEW MISSION</div>
+        <div className="panel clip" style={{padding:24}}>
+          <div style={{display:"flex",flexDirection:"column",gap:16}}>
+            <div>
+              <label style={{display:"block",fontSize:11,fontFamily:"Orbitron",color:"var(--text2)",letterSpacing:1,marginBottom:7}}>MISSION NAME</label>
+              <input className="input" value={addGoalForm.title} onChange={e=>setAddGoalForm(f=>({...f,title:e.target.value}))} placeholder="e.g. Master Music Theory" onKeyDown={e=>e.key==="Enter"&&addGoal()}/>
+            </div>
+            <div>
+              <label style={{display:"block",fontSize:11,fontFamily:"Orbitron",color:"var(--text2)",letterSpacing:1,marginBottom:7}}>CATEGORY</label>
+              <select className="input" value={addGoalForm.category} onChange={e=>setAddGoalForm(f=>({...f,category:e.target.value}))}>
+                {Object.entries(CATEGORIES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{display:"block",fontSize:11,fontFamily:"Orbitron",color:"var(--text2)",letterSpacing:1,marginBottom:7}}>IMPORTANCE TIER</label>
+              <select className="input" value={addGoalForm.importance} onChange={e=>setAddGoalForm(f=>({...f,importance:e.target.value}))}>
+                {Object.entries(IMPORTANCE_TIERS).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{display:"block",fontSize:11,fontFamily:"Orbitron",color:"var(--text2)",letterSpacing:1,marginBottom:7}}>BOSS NAME <span style={{color:"var(--text3)"}}>(optional)</span></label>
+              <input className="input" value={addGoalForm.bossName} onChange={e=>setAddGoalForm(f=>({...f,bossName:e.target.value}))} placeholder="e.g. The Procrastination Beast"/>
+            </div>
+            <div style={{display:"flex",gap:12,marginTop:8}}>
+              <button className="btn btn-gold" onClick={addGoal}>⚡ DEPLOY MISSION</button>
+              <button className="btn btn-ghost" onClick={()=>setView("dashboard")}>CANCEL</button>
+            </div>
+          </div>
+        </div>
+      </div>}
+
+      {view==="goal"&&activeGoal&&(()=>{
+        const cat=CATEGORIES[activeGoal.category];
+        const allT=flattenTasks(activeGoal.tasks);
+        const done=allT.filter(t=>t.completed).length;
+        const total=allT.length;
+        const hpPct=activeGoal.maxHP>0?(activeGoal.currentHP/activeGoal.maxHP)*100:100;
+        const defeated=activeGoal.currentHP<=0;
+        return(<div style={{animation:"fadeSlideIn 0.3s ease"}}>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:18}}>
+            <button className="btn btn-ghost btn-sm" onClick={()=>setView("dashboard")}>← BACK</button>
+            <div style={{fontFamily:"Orbitron",fontSize:11,color:cat.color,letterSpacing:2}}>{cat.icon} {cat.label}</div>
+          </div>
+          <div className="panel clip" style={{padding:22,marginBottom:18,borderColor:tierInfo.color+"66",background:"linear-gradient(135deg,#0a1828,#0f1e30)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+              <div style={{flex:1,marginRight:14}}>
+                <div style={{fontFamily:"Orbitron",fontSize:20,fontWeight:900,color:"var(--text)",marginBottom:6}}>{activeGoal.title}</div>
+                <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8}}>
+                  <div style={{fontFamily:"Orbitron",fontSize:12,color:tierInfo.color,letterSpacing:1}}>{tierInfo.icon} {tierInfo.label}</div>
+                </div>
+                <div style={{fontFamily:"Orbitron",fontSize:13,color:tierInfo.color,letterSpacing:1}}>{defeated?"☠ BOSS DEFEATED":`☠ BOSS: ${activeGoal.bossName}`}</div>
+              </div>
+              <div style={{textAlign:"right",flexShrink:0}}>
+                <div style={{fontFamily:"Orbitron",fontSize:11,color:"var(--text2)",marginBottom:6}}>{done}/{total} TASKS</div>
+                <div style={{fontFamily:"Orbitron",fontSize:26,fontWeight:900,color:defeated?"var(--gold)":tierInfo.color}}>{defeated?"☠":`${Math.ceil(hpPct)}%`}</div>
+              </div>
+            </div>
+            <div>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--text2)",marginBottom:6}}><span>BOSS HP</span><span>{activeGoal.currentHP} / {activeGoal.maxHP}</span></div>
+              <div className="boss-hp-track" style={{height:16}}><div className="boss-hp-fill" style={{width:`${Math.max(0,hpPct)}%`,background:defeated?`linear-gradient(90deg,${tierInfo.color},var(--orange))`:`linear-gradient(90deg,#ff1a40,${tierInfo.color})`}}/></div>
+            </div>
+          </div>
+
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+            <div style={{fontFamily:"Orbitron",fontSize:12,color:"var(--cyan)",letterSpacing:2}}>◈ MISSION TASKS</div>
+            <div style={{display:"flex",gap:8}}>
+              <button className="btn btn-sm" onClick={()=>{setShowAddTask(true);setAddTaskForm(f=>({...f,parentId:null}));}}>+ ADD TASK</button>
+              <button className="btn btn-sm btn-ghost" onClick={()=>setEditingGoal(activeGoal)}>✎ EDIT</button>
+            </div>
+          </div>
+
+          {activeGoal.tasks.length===0?<div className="panel" style={{padding:24,textAlign:"center",color:"var(--text3)"}}>Add your first task to deal damage to the boss.</div>:<div style={{display:"flex",flexDirection:"column",gap:8}}>{activeGoal.tasks.map(task=><TaskRow key={task.id} task={task} goalId={activeGoal.id} onComplete={completeTask} onAddChild={pid=>{setAddTaskForm(f=>({...f,parentId:pid}));setShowAddTask(true);}} depth={0} moodFilter={moodFilter} lockedCompleted={defeated}/>)}</div>}
+
+          {showAddTask&&<div className="panel clip" style={{padding:16,marginTop:14,borderColor:"var(--cyan)",animation:"fadeSlideIn 0.2s ease"}}>
+            <div style={{fontFamily:"Orbitron",fontSize:11,color:"var(--cyan)",letterSpacing:2,marginBottom:12}}>{addTaskForm.parentId?"◈ ADD SUBTASK":"◈ ADD TASK"}</div>
+            <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+              <input className="input" style={{flex:"1 1 200px"}} value={addTaskForm.title} onChange={e=>setAddTaskForm(f=>({...f,title:e.target.value}))} placeholder="Task description..." onKeyDown={e=>e.key==="Enter"&&addTask()} autoFocus/>
+              <select className="input" style={{width:160}} value={addTaskForm.size} onChange={e=>setAddTaskForm(f=>({...f,size:e.target.value}))}>
+                {Object.entries(SIZES).map(([k,v])=><option key={k} value={k}>{v.label} (+{v.xp} XP)</option>)}
+              </select>
+              <button className="btn" onClick={addTask}>ADD</button>
+              <button className="btn btn-ghost" onClick={()=>setShowAddTask(false)}>CANCEL</button>
+            </div>
+          </div>}
+        </div>);
+      })()}
+
+      {view==="badges"&&<div style={{animation:"fadeSlideIn 0.3s ease"}}>
+        <div style={{fontFamily:"Orbitron",fontSize:15,color:"var(--gold)",letterSpacing:2,marginBottom:20}}>🏆 ACHIEVEMENT ARCHIVE</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:13}}>
+          {BADGES.map(b=>{const unlocked=unlockedBadges.includes(b.id);return(
+            <div key={b.id} className="panel clip" style={{padding:"16px 18px",borderColor:unlocked?"var(--gold)":"var(--border)",opacity:unlocked?1:0.45,transition:"all 0.3s"}}>
+              <div style={{fontSize:32,marginBottom:8}}>{unlocked?b.icon:"🔒"}</div>
+              <div style={{fontFamily:"Orbitron",fontSize:12,color:unlocked?"var(--gold)":"var(--text3)",fontWeight:700,marginBottom:6}}>{b.label}</div>
+              <div style={{fontSize:13,color:"var(--text2)"}}>{b.desc}</div>
+            </div>
+          );})}
+        </div>
+        <div style={{marginTop:18}}><button className="btn btn-ghost" onClick={()=>setView("dashboard")}>← BACK</button></div>
+      </div>}
+    </div>
+  </>);
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
